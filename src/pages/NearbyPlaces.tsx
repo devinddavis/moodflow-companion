@@ -1,9 +1,19 @@
-import { useState } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { motion } from 'framer-motion';
-import { getTodayEntry } from '@/lib/mood-store';
+import { getTodayEntry, getPreferences } from '@/lib/mood-store';
+import { supabase } from '@/integrations/supabase/client';
+import { Skeleton } from '@/components/ui/skeleton';
+import { useToast } from '@/hooks/use-toast';
 
-const placeCategoriesByMood: Record<string, Array<{ type: string; label: string; emoji: string; reason: string }>> = {
+interface PlaceCategory {
+  type: string;
+  label: string;
+  emoji: string;
+  reason: string;
+}
+
+const fallbackByMood: Record<string, PlaceCategory[]> = {
   struggling: [
     { type: 'park', label: 'Nature Park or Trail', emoji: '🌿', reason: 'Fresh air and greenery can gently lift your spirits when energy is low.' },
     { type: 'cafe', label: 'Cozy Café', emoji: '☕', reason: 'A warm drink in a calm space can help you feel grounded and cared for.' },
@@ -36,27 +46,90 @@ const placeCategoriesByMood: Record<string, Array<{ type: string; label: string;
   ],
 };
 
+function getCacheKey(moodKey: string) {
+  const today = new Date().toISOString().slice(0, 10);
+  return `moodflow_places_${today}_${moodKey}`;
+}
+
 export default function NearbyPlaces() {
   const navigate = useNavigate();
+  const { toast } = useToast();
   const todayEntry = getTodayEntry();
+  const prefs = getPreferences();
+
   const [locationGranted, setLocationGranted] = useState(false);
   const [city, setCity] = useState('');
+  const [categories, setCategories] = useState<PlaceCategory[]>([]);
+  const [loading, setLoading] = useState(false);
 
   const moodKey = todayEntry?.moodKey || 'neutral';
-  const categories = placeCategoriesByMood[moodKey] || placeCategoriesByMood.neutral;
+
+  // Load cached or fallback on mount
+  useEffect(() => {
+    const cached = localStorage.getItem(getCacheKey(moodKey));
+    if (cached) {
+      try { setCategories(JSON.parse(cached)); return; } catch {}
+    }
+    setCategories(fallbackByMood[moodKey] || fallbackByMood.neutral);
+  }, [moodKey]);
+
+  const fetchAIPlaces = useCallback(async (forceRefresh = false) => {
+    const cacheKey = getCacheKey(moodKey);
+    if (!forceRefresh) {
+      const cached = localStorage.getItem(cacheKey);
+      if (cached) { try { setCategories(JSON.parse(cached)); return; } catch {} }
+    }
+
+    setLoading(true);
+    try {
+      const { data, error } = await supabase.functions.invoke('ai-places', {
+        body: {
+          moodKey,
+          moodLabel: todayEntry?.moodLabel || moodKey,
+          energy: todayEntry?.energy ?? 50,
+          stress: todayEntry?.stress ?? 50,
+          motivation: todayEntry?.motivation ?? 50,
+          city: city || undefined,
+          tone: prefs.tonePreference || 'warm',
+        },
+      });
+
+      if (error) throw error;
+
+      if (data?.places && Array.isArray(data.places) && data.places.length > 0) {
+        setCategories(data.places);
+        localStorage.setItem(cacheKey, JSON.stringify(data.places));
+      } else {
+        throw new Error('No places returned');
+      }
+    } catch (err: any) {
+      console.error('AI places error:', err);
+      toast({ title: 'Using default recommendations', description: 'AI suggestions unavailable right now — showing curated defaults.', variant: 'default' });
+      setCategories(fallbackByMood[moodKey] || fallbackByMood.neutral);
+    } finally {
+      setLoading(false);
+    }
+  }, [moodKey, todayEntry, city, prefs.tonePreference, toast]);
+
+  // Fetch AI places when location is granted
+  useEffect(() => {
+    if (locationGranted) {
+      fetchAIPlaces();
+    }
+  }, [locationGranted, fetchAIPlaces]);
 
   const handleShareLocation = () => {
     if (navigator.geolocation) {
       navigator.geolocation.getCurrentPosition(
-        (pos) => {
-          setLocationGranted(true);
-          setCity('Your area');
-        },
-        () => {
-          setLocationGranted(false);
-        }
+        () => { setLocationGranted(true); setCity(prev => prev || 'Your area'); },
+        () => { setLocationGranted(false); toast({ title: 'Location access denied', description: 'You can enter your city instead.', variant: 'destructive' }); }
       );
     }
+  };
+
+  const handleRefresh = () => {
+    localStorage.removeItem(getCacheKey(moodKey));
+    fetchAIPlaces(true);
   };
 
   return (
@@ -93,42 +166,66 @@ export default function NearbyPlaces() {
           </div>
         </motion.div>
       ) : (
-        <div className="mb-6">
-          <span className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-mint-pale text-foreground text-sm font-semibold mb-4">
-            📍 {city || 'Your area'}
-          </span>
-          <p className="text-sm text-muted-foreground">
-            Feeling {todayEntry?.moodLabel || 'neutral'} today · Places chosen for you 🧭
-          </p>
+        <div className="mb-6 flex items-center justify-between flex-wrap gap-3">
+          <div>
+            <span className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-mint-pale text-foreground text-sm font-semibold mb-2">
+              📍 {city || 'Your area'}
+            </span>
+            <p className="text-sm text-muted-foreground">
+              Feeling {todayEntry?.moodLabel || 'neutral'} today · AI-curated for you 🧭
+            </p>
+          </div>
+          <button
+            onClick={handleRefresh}
+            disabled={loading}
+            className="px-4 py-2 rounded-xl border border-border bg-card text-foreground text-sm font-semibold hover:bg-accent transition-colors disabled:opacity-50"
+          >
+            {loading ? 'Generating…' : 'Refresh Places 🔄'}
+          </button>
         </div>
       )}
 
       {/* Place categories */}
       <div className="space-y-6">
-        {categories.map((cat, i) => (
-          <motion.div
-            key={cat.type}
-            initial={{ opacity: 0, y: 20 }}
-            animate={{ opacity: 1, y: 0 }}
-            transition={{ delay: i * 0.1 }}
-            className={`${i % 2 === 0 ? 'bg-mint-pale' : 'bg-lavender-pale'} rounded-3xl p-6 card-shadow`}
-          >
-            <div className="flex items-start gap-4">
-              <div className="w-14 h-14 rounded-2xl bg-card flex items-center justify-center text-2xl flex-shrink-0 card-shadow">
-                {cat.emoji}
-              </div>
-              <div>
-                <h3 className="font-display font-bold text-lg text-foreground">{cat.label}</h3>
-                <p className="text-sm text-text-mid mt-1">{cat.reason}</p>
-                {locationGranted && (
-                  <p className="text-xs text-muted-foreground mt-3 italic">
-                    Connect a Google Places API key in settings to see real nearby locations.
-                  </p>
-                )}
+        {loading ? (
+          Array.from({ length: 4 }).map((_, i) => (
+            <div key={i} className={`${i % 2 === 0 ? 'bg-mint-pale' : 'bg-lavender-pale'} rounded-3xl p-6 card-shadow`}>
+              <div className="flex items-start gap-4">
+                <Skeleton className="w-14 h-14 rounded-2xl flex-shrink-0" />
+                <div className="flex-1 space-y-3">
+                  <Skeleton className="h-5 w-40" />
+                  <Skeleton className="h-4 w-full" />
+                  <Skeleton className="h-4 w-3/4" />
+                </div>
               </div>
             </div>
-          </motion.div>
-        ))}
+          ))
+        ) : (
+          categories.map((cat, i) => (
+            <motion.div
+              key={cat.type + i}
+              initial={{ opacity: 0, y: 20 }}
+              animate={{ opacity: 1, y: 0 }}
+              transition={{ delay: i * 0.1 }}
+              className={`${i % 2 === 0 ? 'bg-mint-pale' : 'bg-lavender-pale'} rounded-3xl p-6 card-shadow`}
+            >
+              <div className="flex items-start gap-4">
+                <div className="w-14 h-14 rounded-2xl bg-card flex items-center justify-center text-2xl flex-shrink-0 card-shadow">
+                  {cat.emoji}
+                </div>
+                <div>
+                  <h3 className="font-display font-bold text-lg text-foreground">{cat.label}</h3>
+                  <p className="text-sm text-text-mid mt-1">{cat.reason}</p>
+                  {locationGranted && (
+                    <p className="text-xs text-muted-foreground mt-3 italic">
+                      Real nearby businesses coming soon ✨
+                    </p>
+                  )}
+                </div>
+              </div>
+            </motion.div>
+          ))
+        )}
       </div>
     </div>
   );
