@@ -90,7 +90,7 @@ export default function NearbyPlaces() {
           stress: todayEntry?.stress ?? 50,
           motivation: todayEntry?.motivation ?? 50,
           city: city || undefined,
-          tone: prefs.tonePreference || 'warm',
+          tone: prefs.contentTone || 'warm',
         },
       });
 
