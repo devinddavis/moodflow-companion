@@ -109,7 +109,7 @@ export default function NearbyPlaces() {
     } finally {
       setLoading(false);
     }
-  }, [moodKey, todayEntry, city, prefs.tonePreference, toast]);
+  }, [moodKey, todayEntry, city, prefs.contentTone, toast]);
 
   // Fetch AI places when location is granted
   useEffect(() => {
