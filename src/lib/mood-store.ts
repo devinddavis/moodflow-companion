@@ -89,3 +89,12 @@ export function clearAllData() {
   localStorage.removeItem(ENTRIES_KEY);
   localStorage.removeItem(PREFS_KEY);
 }
+
+export function updateTodayEntry(patch: Partial<MoodEntry>) {
+  const entries = getEntries();
+  const today = new Date().toDateString();
+  const idx = entries.findIndex(e => new Date(e.createdAt).toDateString() === today);
+  if (idx === -1) return;
+  entries[idx] = { ...entries[idx], ...patch };
+  localStorage.setItem(ENTRIES_KEY, JSON.stringify(entries));
+}
