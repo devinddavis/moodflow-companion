@@ -1,41 +1,57 @@
-## Why Nearby Places isn't working
+## Goals
 
-The page makes **two backend calls**:
+1. Let users return to today's activity Suggestions after leaving the screen.
+2. Make AI-generated Suggestions, Affirmations, and Insights feel fresh and varied — both on first generation and on demand.
 
-1. `ai-places` — picks 4 place categories from your mood. ✅ Works (returns 200).
-2. `nearby-places` — supposed to call Google Places API to fetch real businesses. ❌ **This function was never actually created** in the project, so every call returns "Failed to fetch" — both for typed cities ("Long Beach, CA") and for geolocation (lat/long).
+## Changes
 
-The `GOOGLE_PLACES_API_KEY` secret is set, but there's no edge function using it.
+### 1. Persistent access to Suggestions
 
-## The Fix
+- **`src/components/layout/AppSidebar.tsx`** — Add a new nav item "Today's Suggestions" (`/suggestions`, emoji ✨ or 🌟) between Daily Check-In and Affirmations. Only visible/clickable when a today entry exists (otherwise route the user to `/checkin`). The page already reads cached `aiSuggestions` from `getTodayEntry()`, so revisiting will instantly restore the same suggestions.
 
-### 1. Create the missing `supabase/functions/nearby-places/index.ts` edge function
+- **`src/pages/Dashboard.tsx`** — Add a small "View today's suggestions →" link/card when a today entry exists, pointing to `/suggestions`. (Quick-access shortcut so users don't need the sidebar.)
 
-It needs to:
-- Accept either `{ address, placeTypes, radius }` or `{ latitude, longitude, placeTypes, radius }` from the client.
-- If given an `address`, call Google **Geocoding API** to convert it into lat/long.
-- For each `placeType` (e.g. `gym`, `park`, `restaurant`), call Google **Places Nearby Search API** in parallel and collect up to ~3 results per type.
-- Return a structured JSON response:
-  ```json
-  { "results": { "gym": [...], "park": [...], ... }, "source": "google" }
-  ```
-- Include proper CORS headers on every response (including errors).
-- **Never throw a 500** — wrap all errors and return `{ error, fallback: true, results: {} }` with status 200 so the UI can show a graceful message instead of crashing.
+### 2. Fresher, more unique AI output
 
-### 2. Verify the frontend handles the response correctly
+Currently each page caches one result per day on the `todayEntry` and never asks the model again, and the prompts have no anti-repetition seeding — so users see the same items repeatedly.
 
-Quickly confirm `NearbyPlaces.tsx` reads `placesData.results` in the shape the new function returns. Adjust either side if needed so they line up.
+#### A. Add a manual "Regenerate" action on each AI page
 
-### 3. Test end-to-end
+- **`src/pages/Suggestions.tsx`**, **`src/pages/Affirmations.tsx`**, **`src/pages/Insights.tsx`**
+  - Add a small "🔄 Regenerate" button near the header.
+  - On click: re-invoke the corresponding edge function with a new random `seed` and `avoid` list (recent items already shown today), update local state, and persist the new value to `todayEntry`.
+  - Keep cached values on first load so repeat visits are instant; regeneration is opt-in.
 
-After deploying, test with both:
-- A typed city ("Long Beach, CA")
-- Browser geolocation
+#### B. Track recent items to avoid repeats
 
-Check the edge function logs to confirm Google Places is actually being hit and the API key is valid.
+- **`src/lib/mood-data.ts`** — Extend `MoodEntry` with optional `aiSuggestionHistory?: any[]`, `aiAffirmationHistory?: string[]`, `aiInsightHistory?: any[]` (kept only for today's entry, capped to last ~12 items).
+- **`src/lib/mood-store.ts`** — Add helper `appendAiHistory(field, items)` that merges into the today entry and trims length.
+- When pages call edge functions, send `avoid: history` so the model is told what NOT to repeat.
 
-## What you'll see after the fix
+#### C. Make prompts demand novelty
 
-- Real businesses (names, ratings, vicinity) grouped by category
-- "Get Directions" links opening Google Maps
-- A clear error message (not a silent failure) if the Google API key has issues
+Update each edge function to:
+- Accept new optional body fields: `seed` (random int), `avoid` (string[] of titles/text already used).
+- Add an `avoid` block to the prompt: "Do NOT repeat or rephrase any of these recent items: …".
+- Add a randomness instruction: "Surprise the user with a less obvious angle. Vary categories, verbs, and metaphors from anything common."
+- Bump `temperature` to `1.1` and add `topP: 0.95` for more variety.
+- Use the `seed` value in the prompt text ("Variation seed: 4827 — pick a creative direction this seed suggests") to nudge different outputs even with identical mood inputs.
+
+Edge functions to update:
+- `supabase/functions/ai-suggestions/index.ts`
+- `supabase/functions/ai-affirmations/index.ts`
+- `supabase/functions/ai-insight/index.ts`
+- `supabase/functions/ai-quote/index.ts` (same treatment so the daily quote also varies on regenerate)
+
+#### D. Frontend wiring
+
+In each page's regenerate handler, build payload:
+```ts
+{ ...basePayload, seed: Math.floor(Math.random() * 100000), avoid: history }
+```
+On success, prepend new items to the history (capped) and save via `updateTodayEntry` + `appendAiHistory`.
+
+## Out of scope
+
+- No DB migration needed — all state stays in localStorage on `todayEntry`.
+- No changes to Nearby Places, auth, or other flows.
