@@ -1,57 +1,36 @@
-## Goals
+## Problem
 
-1. Let users return to today's activity Suggestions after leaving the screen.
-2. Make AI-generated Suggestions, Affirmations, and Insights feel fresh and varied — both on first generation and on demand.
+- **Suggestions** are cached after the first check-in and never regenerate. The frontend never sends an `avoid` history or `seed` to the edge function, so the model gravitates to the same 3 ideas regardless of slider values.
+- **Insights** are cached the same way and only send `moodKey`, `moodLabel`, `energy`, `stress` — no focus/motivation, no avoid list, no seed. Once generated, the user sees the same card forever.
 
-## Changes
+## Fix
 
-### 1. Persistent access to Suggestions
+### 1. `supabase/functions/ai-suggestions/index.ts`
+- Accept new body fields: `avoid: string[]`, `seed: string`.
+- Inject into the prompt: a "Do NOT suggest any of these (already used recently): ..." line, plus a "Variation seed: <seed>" line to push the model off its default attractors.
+- Bump `temperature` to `1.1`, add `topP: 0.95`.
+- Strengthen prompt: explicitly require suggestions to reflect the combined slider profile (e.g. "energy 80 + stress 20 + focus 70 → energetic, focused activity"; "energy 20 + stress 80 → grounding/calming"). Forbid generic items like "drink water", "go for a walk", "meditate" unless the slider profile truly demands it.
 
-- **`src/components/layout/AppSidebar.tsx`** — Add a new nav item "Today's Suggestions" (`/suggestions`, emoji ✨ or 🌟) between Daily Check-In and Affirmations. Only visible/clickable when a today entry exists (otherwise route the user to `/checkin`). The page already reads cached `aiSuggestions` from `getTodayEntry()`, so revisiting will instantly restore the same suggestions.
+### 2. `supabase/functions/ai-insight/index.ts`
+- Accept `focus`, `motivation`, `avoid: string[]`, `seed: string`.
+- Include all four sliders in prompt and require the insight to be specifically relevant to that combined profile, not just the mood label.
+- Add "Avoid these previous insight titles: ..." line and a "Variation seed: <seed>" line.
+- Bump `temperature` to `1.1`, `topP: 0.95`.
 
-- **`src/pages/Dashboard.tsx`** — Add a small "View today's suggestions →" link/card when a today entry exists, pointing to `/suggestions`. (Quick-access shortcut so users don't need the sidebar.)
+### 3. `src/pages/Suggestions.tsx`
+- Pass `avoid: todayEntry?.aiSuggestionHistory ?? []` and a fresh `seed: crypto.randomUUID()` in the invoke body for `ai-suggestions` (and `ai-quote`).
+- After a successful response, call `appendAiHistory('aiSuggestionHistory', suggestions.map(s => s.name))` and `appendAiHistory('aiQuoteHistory', [quote])` so future generations avoid them.
+- Use latest sliders from `state` (just-completed check-in) when present, otherwise from `todayEntry`, so a fresh check-in immediately influences generation.
 
-### 2. Fresher, more unique AI output
+### 4. `src/pages/Insights.tsx`
+- Pass `focus`, `motivation`, `avoid: todayEntry?.aiInsightHistory ?? []`, `seed: crypto.randomUUID()`.
+- After response, `appendAiHistory('aiInsightHistory', [insight.title])`.
 
-Currently each page caches one result per day on the `todayEntry` and never asks the model again, and the prompts have no anti-repetition seeding — so users see the same items repeatedly.
+### 5. Caching behavior
+Keep the existing daily cache rule (per memory): once today's suggestions/insight are stored, the page reuses them on revisit. The avoid history accumulates across days so the next day's generation won't repeat recent items.
 
-#### A. Add a manual "Regenerate" action on each AI page
-
-- **`src/pages/Suggestions.tsx`**, **`src/pages/Affirmations.tsx`**, **`src/pages/Insights.tsx`**
-  - Add a small "🔄 Regenerate" button near the header.
-  - On click: re-invoke the corresponding edge function with a new random `seed` and `avoid` list (recent items already shown today), update local state, and persist the new value to `todayEntry`.
-  - Keep cached values on first load so repeat visits are instant; regeneration is opt-in.
-
-#### B. Track recent items to avoid repeats
-
-- **`src/lib/mood-data.ts`** — Extend `MoodEntry` with optional `aiSuggestionHistory?: any[]`, `aiAffirmationHistory?: string[]`, `aiInsightHistory?: any[]` (kept only for today's entry, capped to last ~12 items).
-- **`src/lib/mood-store.ts`** — Add helper `appendAiHistory(field, items)` that merges into the today entry and trims length.
-- When pages call edge functions, send `avoid: history` so the model is told what NOT to repeat.
-
-#### C. Make prompts demand novelty
-
-Update each edge function to:
-- Accept new optional body fields: `seed` (random int), `avoid` (string[] of titles/text already used).
-- Add an `avoid` block to the prompt: "Do NOT repeat or rephrase any of these recent items: …".
-- Add a randomness instruction: "Surprise the user with a less obvious angle. Vary categories, verbs, and metaphors from anything common."
-- Bump `temperature` to `1.1` and add `topP: 0.95` for more variety.
-- Use the `seed` value in the prompt text ("Variation seed: 4827 — pick a creative direction this seed suggests") to nudge different outputs even with identical mood inputs.
-
-Edge functions to update:
-- `supabase/functions/ai-suggestions/index.ts`
-- `supabase/functions/ai-affirmations/index.ts`
-- `supabase/functions/ai-insight/index.ts`
-- `supabase/functions/ai-quote/index.ts` (same treatment so the daily quote also varies on regenerate)
-
-#### D. Frontend wiring
-
-In each page's regenerate handler, build payload:
-```ts
-{ ...basePayload, seed: Math.floor(Math.random() * 100000), avoid: history }
-```
-On success, prepend new items to the history (capped) and save via `updateTodayEntry` + `appendAiHistory`.
+### 6. No DB / migration changes
+History fields already exist on `MoodEntry` and `appendAiHistory` is already implemented in `mood-store.ts`.
 
 ## Out of scope
-
-- No DB migration needed — all state stays in localStorage on `todayEntry`.
-- No changes to Nearby Places, auth, or other flows.
+Refresh buttons; affirmations uniqueness (already handled in prior pass).
