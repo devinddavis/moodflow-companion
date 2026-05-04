@@ -1,7 +1,9 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { motion, AnimatePresence } from 'framer-motion';
-import { getTodayEntry } from '@/lib/mood-store';
+import { getTodayEntry, getUser, getPreferences, updateTodayEntry } from '@/lib/mood-store';
+import { supabase } from '@/integrations/supabase/client';
+import { Skeleton } from '@/components/ui/skeleton';
 
 const defaultAffirmations = [
   { emoji: '🌸', text: 'You are worthy of rest, kindness, and every good thing coming your way today.' },
@@ -14,10 +16,30 @@ export default function Affirmations() {
   const navigate = useNavigate();
   const [current, setCurrent] = useState(0);
   const todayEntry = getTodayEntry();
+  const user = getUser();
+  const prefs = getPreferences();
+  const [aiList, setAiList] = useState<string[] | null>(todayEntry?.aiAffirmations ?? null);
+  const [loading, setLoading] = useState(!todayEntry?.aiAffirmations);
 
-  // Use mood-based affirmations if available
-  const affirmations = todayEntry?.aiAffirmations
-    ? todayEntry.aiAffirmations.map((text, i) => ({ emoji: ['🌸', '✨', '🌿', '💫'][i], text }))
+  useEffect(() => {
+    if (todayEntry?.aiAffirmations || !todayEntry) { setLoading(false); return; }
+    supabase.functions.invoke('ai-affirmations', {
+      body: {
+        userName: user?.name, moodKey: todayEntry.moodKey, moodLabel: todayEntry.moodLabel,
+        energy: todayEntry.energy, stress: todayEntry.stress, tone: prefs.contentTone || 'warm',
+      },
+    }).then(({ data }) => {
+      const a = (data as any)?.affirmations;
+      if (Array.isArray(a) && a.length >= 4) {
+        setAiList(a);
+        updateTodayEntry({ aiAffirmations: a });
+      }
+    }).catch(() => {}).finally(() => setLoading(false));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  const affirmations = aiList && aiList.length >= 4
+    ? aiList.map((text, i) => ({ emoji: ['🌸', '✨', '🌿', '💫'][i], text }))
     : defaultAffirmations;
 
   const next = () => setCurrent((c) => (c + 1) % affirmations.length);
@@ -40,6 +62,13 @@ export default function Affirmations() {
 
         {/* Card */}
         <AnimatePresence mode="wait">
+          {loading ? (
+            <div className="glass-card rounded-3xl p-10 text-center space-y-4">
+              <Skeleton className="h-12 w-12 mx-auto rounded-full bg-primary-foreground/20" />
+              <Skeleton className="h-6 w-full bg-primary-foreground/20" />
+              <Skeleton className="h-6 w-3/4 mx-auto bg-primary-foreground/20" />
+            </div>
+          ) : (
           <motion.div
             key={current}
             initial={{ opacity: 0, scale: 0.95 }}
@@ -54,6 +83,7 @@ export default function Affirmations() {
             </p>
             <p className="text-xs text-primary-foreground/40">MoodFlow · Daily Wellness</p>
           </motion.div>
+          )}
         </AnimatePresence>
 
         {/* Dots */}
