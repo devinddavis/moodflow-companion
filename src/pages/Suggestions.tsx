@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
 import { motion } from 'framer-motion';
 import { SUGGESTIONS } from '@/lib/mood-data';
-import { getUser, getTodayEntry, updateTodayEntry, getPreferences } from '@/lib/mood-store';
+import { getUser, getTodayEntry, updateTodayEntry, getPreferences, appendAiHistory } from '@/lib/mood-store';
 import { supabase } from '@/integrations/supabase/client';
 import { Skeleton } from '@/components/ui/skeleton';
 
@@ -45,24 +45,37 @@ export default function Suggestions() {
       userName: user.name, moodKey, moodLabel, energy, stress, focus, motivation,
       tone: prefs.contentTone || 'warm',
     };
+    const suggestionAvoid = todayEntry?.aiSuggestionHistory ?? [];
+    const quoteAvoid = todayEntry?.aiQuoteHistory ?? [];
 
     if (!todayEntry?.aiQuote) {
-      supabase.functions.invoke('ai-quote', { body: payload }).then(({ data }) => {
+      supabase.functions.invoke('ai-quote', {
+        body: { ...payload, avoid: quoteAvoid, seed: crypto.randomUUID() },
+      }).then(({ data }) => {
         const q = (data as any)?.quote || fallbackQuotes[moodKey] || fallbackQuotes.neutral;
         setQuote(q);
         updateTodayEntry({ aiQuote: q });
+        appendAiHistory('aiQuoteHistory', [q]);
       }).catch(() => setQuote(fallbackQuotes[moodKey] || fallbackQuotes.neutral))
         .finally(() => setLoadingQuote(false));
     }
 
     if (!todayEntry?.aiSuggestions) {
       supabase.functions.invoke('ai-suggestions', {
-        body: { ...payload, showProductivity: prefs.showProductivity, showSelfCare: prefs.showSelfCare, showInsights: prefs.showInsights },
+        body: {
+          ...payload,
+          showProductivity: prefs.showProductivity,
+          showSelfCare: prefs.showSelfCare,
+          showInsights: prefs.showInsights,
+          avoid: suggestionAvoid,
+          seed: crypto.randomUUID(),
+        },
       }).then(({ data }) => {
         const s = (data as any)?.suggestions;
         if (Array.isArray(s) && s.length > 0) {
           setSuggestions(s);
           updateTodayEntry({ aiSuggestions: s });
+          appendAiHistory('aiSuggestionHistory', s.map((x: any) => x?.name).filter(Boolean));
         } else {
           setSuggestions(null);
         }
