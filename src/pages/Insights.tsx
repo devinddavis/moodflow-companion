@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 import { motion } from 'framer-motion';
 import { useNavigate } from 'react-router-dom';
 import { INSIGHT_CARDS } from '@/lib/mood-data';
-import { getTodayEntry, getPreferences, updateTodayEntry } from '@/lib/mood-store';
+import { getTodayEntry, getPreferences, updateTodayEntry, appendAiHistory } from '@/lib/mood-store';
 import { supabase } from '@/integrations/supabase/client';
 import { Skeleton } from '@/components/ui/skeleton';
 
@@ -39,12 +39,16 @@ export default function Insights() {
       body: {
         moodKey: todayEntry.moodKey, moodLabel: todayEntry.moodLabel,
         energy: todayEntry.energy, stress: todayEntry.stress,
+        focus: todayEntry.focus, motivation: todayEntry.motivation,
         tone: prefs.contentTone || 'warm',
+        avoid: todayEntry.aiInsightHistory ?? [],
+        seed: crypto.randomUUID(),
       },
     }).then(({ data }) => {
       const ins = (data as any)?.insight ?? null;
       setAiInsight(ins);
       updateTodayEntry({ aiInsight: ins });
+      if (ins?.title) appendAiHistory('aiInsightHistory', [ins.title]);
     }).catch(() => {
       setAiInsight(null);
       updateTodayEntry({ aiInsight: null });
