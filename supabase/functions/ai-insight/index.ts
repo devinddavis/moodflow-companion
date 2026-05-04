@@ -10,13 +10,16 @@ serve(async (req) => {
   if (req.method === "OPTIONS") return new Response(null, { headers: corsHeaders });
 
   try {
-    const { moodKey, moodLabel, energy, stress, tone } = await req.json();
+    const { moodKey, moodLabel, energy, stress, focus, motivation, tone, avoid, seed } = await req.json();
     const GEMINI_API_KEY = Deno.env.get("GEMINI_API_KEY");
     if (!GEMINI_API_KEY) {
       return new Response(JSON.stringify({ insight: null, source: "fallback" }), {
         headers: { ...corsHeaders, "Content-Type": "application/json" },
       });
     }
+
+    const avoidList: string[] = Array.isArray(avoid) ? avoid.filter(Boolean) : [];
+    const variationSeed: string = seed || crypto.randomUUID();
 
     const prompt = `You are a wellness educator for a mood tracking app called MoodFlow.
 
@@ -25,14 +28,16 @@ Generate one short educational insight personalized to a user's current emotiona
 Rules:
 - Write for a general audience. No medical jargon.
 - Make it genuinely interesting and specific — something the user probably has not heard before.
-- It should feel directly relevant to how the user is feeling right now.
+- It MUST be directly relevant to the combined slider profile, not just the mood label. For example: high stress + low energy calls for a different fact than high energy + high focus.
+- Do NOT repeat any of these previously-shown insight titles: ${avoidList.length ? JSON.stringify(avoidList) : "(none yet)"}.
+- Variation seed (use to pick a fresh angle, do not mention in output): ${variationSeed}
 - Tone: warm = friendly/caring, playful = surprising/fun, calm = serene/thoughtful.
 - Return ONLY a valid JSON object. No markdown. No explanation.
 - Format: {"emoji":"🧠","category":"Psychology","theme":"lavender","title":"Max 8 words","body":"2 to 3 sentences."}
 - theme must be one of: "lavender", "mint", "yellow"
 
 Mood: ${moodLabel || moodKey}
-Energy: ${energy ?? 50}/100, Stress: ${stress ?? 50}/100
+Energy: ${energy ?? 50}/100, Stress: ${stress ?? 50}/100, Focus: ${focus ?? 50}/100, Motivation: ${motivation ?? 50}/100
 Tone: ${tone || "warm"}`;
 
     const r = await fetch(
@@ -40,7 +45,7 @@ Tone: ${tone || "warm"}`;
       {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ contents: [{ parts: [{ text: prompt }] }], generationConfig: { temperature: 0.9, maxOutputTokens: 400 } }),
+        body: JSON.stringify({ contents: [{ parts: [{ text: prompt }] }], generationConfig: { temperature: 1.1, topP: 0.95, maxOutputTokens: 400 } }),
       },
     );
     if (!r.ok) {
