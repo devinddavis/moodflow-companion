@@ -18,7 +18,7 @@ serve(async (req) => {
   if (req.method === "OPTIONS") return new Response(null, { headers: corsHeaders });
 
   try {
-    const { userName, moodKey, moodLabel, energy, stress, focus, motivation, tone } = await req.json();
+    const { userName, moodKey, moodLabel, energy, stress, focus, motivation, tone, avoid, seed } = await req.json();
     const fallback = fallbackQuotes[moodKey] || fallbackQuotes.neutral;
     const GEMINI_API_KEY = Deno.env.get("GEMINI_API_KEY");
     if (!GEMINI_API_KEY) {
@@ -26,6 +26,9 @@ serve(async (req) => {
         headers: { ...corsHeaders, "Content-Type": "application/json" },
       });
     }
+
+    const avoidList: string[] = Array.isArray(avoid) ? avoid.filter(Boolean) : [];
+    const variationSeed: string = seed || crypto.randomUUID();
 
     const prompt = `You are a compassionate wellness companion for a mood tracking app called MoodFlow.
 
@@ -36,6 +39,8 @@ Rules:
 - Write in second person. Start with You or Your.
 - Make it feel specific to where this person emotionally is — not generic.
 - BANNED phrases: "Every day is a new beginning", "Believe in yourself", "You've got this", "One step at a time", "Keep going", "You are stronger than you think". Do not use these or anything similar.
+- Do NOT repeat any of these previously-shown quotes: ${avoidList.length ? JSON.stringify(avoidList) : "(none yet)"}.
+- Variation seed (use to pick a fresh angle, do not mention in output): ${variationSeed}
 - If mood is struggling or low: be gentle, validating, soft. Do not push productivity.
 - If mood is neutral: be encouraging and grounding.
 - If mood is good or great: be energizing and affirming.
@@ -55,7 +60,7 @@ Tone preference: ${tone || "warm"}`;
       {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ contents: [{ parts: [{ text: prompt }] }], generationConfig: { temperature: 0.9, maxOutputTokens: 200 } }),
+        body: JSON.stringify({ contents: [{ parts: [{ text: prompt }] }], generationConfig: { temperature: 1.1, topP: 0.95, maxOutputTokens: 200 } }),
       },
     );
     if (!r.ok) {
