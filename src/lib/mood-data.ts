@@ -21,6 +21,12 @@ export interface MoodEntry {
   motivation: number;
   aiQuote?: string;
   aiAffirmations?: string[];
+  aiSuggestions?: Array<{
+    emoji: string; category: string; categoryColor: string;
+    cardBackground: string; name: string; description: string;
+  }>;
+  aiInsight?: { emoji: string; category: string; theme: string; title: string; body: string } | null;
+  aiPlaceCategories?: Array<{ type: string; label: string; emoji: string; reason: string }>;
 }
 
 export interface UserPreferences {
