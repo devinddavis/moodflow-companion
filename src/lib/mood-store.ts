@@ -98,3 +98,17 @@ export function updateTodayEntry(patch: Partial<MoodEntry>) {
   entries[idx] = { ...entries[idx], ...patch };
   localStorage.setItem(ENTRIES_KEY, JSON.stringify(entries));
 }
+
+const HISTORY_CAP = 12;
+type HistoryField = 'aiSuggestionHistory' | 'aiAffirmationHistory' | 'aiInsightHistory' | 'aiQuoteHistory';
+
+export function appendAiHistory(field: HistoryField, items: string[]) {
+  const entries = getEntries();
+  const today = new Date().toDateString();
+  const idx = entries.findIndex(e => new Date(e.createdAt).toDateString() === today);
+  if (idx === -1) return;
+  const existing = (entries[idx][field] as string[] | undefined) || [];
+  const merged = [...items, ...existing].slice(0, HISTORY_CAP);
+  entries[idx] = { ...entries[idx], [field]: merged };
+  localStorage.setItem(ENTRIES_KEY, JSON.stringify(entries));
+}

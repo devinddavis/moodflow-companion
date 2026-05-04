@@ -27,6 +27,10 @@ export interface MoodEntry {
   }>;
   aiInsight?: { emoji: string; category: string; theme: string; title: string; body: string } | null;
   aiPlaceCategories?: Array<{ type: string; label: string; emoji: string; reason: string }>;
+  aiSuggestionHistory?: string[];
+  aiAffirmationHistory?: string[];
+  aiInsightHistory?: string[];
+  aiQuoteHistory?: string[];
 }
 
 export interface UserPreferences {

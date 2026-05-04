@@ -4,6 +4,7 @@ import { getUser, setUser, getStreak } from '@/lib/mood-store';
 const navItems = [
   { emoji: '🏠', label: 'Dashboard', path: '/dashboard' },
   { emoji: '😊', label: 'Daily Check-In', path: '/checkin' },
+  { emoji: '🌟', label: "Today's Suggestions", path: '/suggestions' },
   { emoji: '✨', label: 'Affirmations', path: '/affirmations' },
   { emoji: '🧠', label: 'Insights', path: '/insights' },
   { emoji: '📊', label: 'Mood History', path: '/history' },
