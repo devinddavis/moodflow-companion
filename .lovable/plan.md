@@ -1,36 +1,43 @@
-## Problem
+## Goal
 
-- **Suggestions** are cached after the first check-in and never regenerate. The frontend never sends an `avoid` history or `seed` to the edge function, so the model gravitates to the same 3 ideas regardless of slider values.
-- **Insights** are cached the same way and only send `moodKey`, `moodLabel`, `energy`, `stress` — no focus/motivation, no avoid list, no seed. Once generated, the user sees the same card forever.
+Make the Insights page show different cards based on the user's mood, even when the AI falls back (which is happening constantly due to Gemini quota limits). Do this by expanding `INSIGHT_CARDS` into a mood-keyed library and selecting from it based on today's check-in.
 
-## Fix
+## Why
 
-### 1. `supabase/functions/ai-suggestions/index.ts`
-- Accept new body fields: `avoid: string[]`, `seed: string`.
-- Inject into the prompt: a "Do NOT suggest any of these (already used recently): ..." line, plus a "Variation seed: <seed>" line to push the model off its default attractors.
-- Bump `temperature` to `1.1`, add `topP: 0.95`.
-- Strengthen prompt: explicitly require suggestions to reflect the combined slider profile (e.g. "energy 80 + stress 20 + focus 70 → energetic, focused activity"; "energy 20 + stress 80 → grounding/calming"). Forbid generic items like "drink water", "go for a walk", "meditate" unless the slider profile truly demands it.
+The `ai-insight` edge function is currently returning `null` on every call because Gemini's free-tier quota is exhausted (HTTP 429 in the logs). The frontend then renders only the static `INSIGHT_CARDS` from `src/lib/mood-data.ts` — and those are the same 4 cards regardless of mood. Expanding the static library and picking by mood means insights feel personalized even with zero AI calls.
 
-### 2. `supabase/functions/ai-insight/index.ts`
-- Accept `focus`, `motivation`, `avoid: string[]`, `seed: string`.
-- Include all four sliders in prompt and require the insight to be specifically relevant to that combined profile, not just the mood label.
-- Add "Avoid these previous insight titles: ..." line and a "Variation seed: <seed>" line.
-- Bump `temperature` to `1.1`, `topP: 0.95`.
+## Changes
 
-### 3. `src/pages/Suggestions.tsx`
-- Pass `avoid: todayEntry?.aiSuggestionHistory ?? []` and a fresh `seed: crypto.randomUUID()` in the invoke body for `ai-suggestions` (and `ai-quote`).
-- After a successful response, call `appendAiHistory('aiSuggestionHistory', suggestions.map(s => s.name))` and `appendAiHistory('aiQuoteHistory', [quote])` so future generations avoid them.
-- Use latest sliders from `state` (just-completed check-in) when present, otherwise from `todayEntry`, so a fresh check-in immediately influences generation.
+### 1. `src/lib/mood-data.ts` — Expand insights into a mood-keyed bank
 
-### 4. `src/pages/Insights.tsx`
-- Pass `focus`, `motivation`, `avoid: todayEntry?.aiInsightHistory ?? []`, `seed: crypto.randomUUID()`.
-- After response, `appendAiHistory('aiInsightHistory', [insight.title])`.
+Replace the flat `INSIGHT_CARDS` array with a `INSIGHT_BANK` object keyed by `moodKey` (the same keys used by check-in: e.g. `happy`, `calm`, `sad`, `anxious`, `angry`, `tired`, `excited`, `neutral` — match whatever keys `mood-store` already uses).
 
-### 5. Caching behavior
-Keep the existing daily cache rule (per memory): once today's suggestions/insight are stored, the page reuses them on revisit. The avoid history accumulates across days so the next day's generation won't repeat recent items.
+For each mood, write **5–6 unique insight cards** with:
+- Mood-relevant `category` (e.g. "Stress Science" for anxious, "Energy & Sleep" for tired, "Joy Research" for happy)
+- Distinct `emoji`, `title`, `body`, `tag`, and `colorClass` (cycling lavender-pale / mint-pale / yellow-pale)
+- Real psychology / wellness facts tailored to that emotional state
 
-### 6. No DB / migration changes
-History fields already exist on `MoodEntry` and `appendAiHistory` is already implemented in `mood-store.ts`.
+Also keep a `DEFAULT_INSIGHTS` array as a safety net for unknown mood keys.
+
+Export a helper:
+```ts
+export function getInsightsForMood(moodKey: string, count = 4, seed?: string): InsightCard[]
+```
+This deterministically (or pseudo-randomly via seed) picks `count` cards from the mood's bank so the same day shows the same cards but different days/moods show different ones.
+
+### 2. `src/pages/Insights.tsx` — Use mood-aware selection
+
+- Import `getInsightsForMood` instead of `INSIGHT_CARDS`.
+- Compute `const cards = getInsightsForMood(todayEntry?.moodKey ?? 'neutral', 4, todayEntry?.date)`.
+- Render `cards.map(...)` instead of `INSIGHT_CARDS.map(...)`.
+- Keep the existing AI insight card on top — when AI succeeds, user sees 1 AI + 4 mood-matched static cards; when AI fails (current state), they still see 4 mood-matched static cards.
+
+### 3. Leave edge function & AI flow untouched
+
+No changes to `ai-insight/index.ts`. The avoid-list / seed logic from the prior change stays. When Gemini quota recovers, AI insights will naturally start appearing again on top of the now-personalized fallback cards.
 
 ## Out of scope
-Refresh buttons; affirmations uniqueness (already handled in prior pass).
+
+- Refresh button (per earlier decision).
+- Switching AI providers / models to dodge the Gemini quota.
+- Changes to suggestions or affirmations (only insights this round, per your message).
